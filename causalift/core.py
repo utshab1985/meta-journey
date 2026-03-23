@@ -68,6 +68,53 @@ class CausalLift:
         self.results['individual_effects'] = individual_effects
 
         return ate_value
+    
+    def hte(self, data):
+    # We need individual effects calculated first
+        if 'individual_effects' not in self.results:
+            self.ate(data)
+        
+        individual_effects = self.results['individual_effects']
+        
+        # Find what predicts individual treatment effect size
+        # Using confounders as predictors of response
+        from sklearn.linear_model import LinearRegression
+        import numpy as np
+        
+        X_conf = data[self.confounders].values
+        
+        hte_model = LinearRegression()
+        hte_model.fit(X_conf, individual_effects)
+        
+        self.results['hte_coefficients'] = dict(
+            zip(self.confounders, hte_model.coef_)
+        )
+        
+        # Find top and bottom responders
+        self.results['individual_effects'] = individual_effects
+        
+        # Split into high and low responders
+        median_effect = np.median(individual_effects)
+        high_responders = data[individual_effects > median_effect]
+        low_responders = data[individual_effects <= median_effect]
+        
+        self.results['high_responder_avg_effect'] = individual_effects[
+            individual_effects > median_effect
+        ].mean()
+        
+        self.results['low_responder_avg_effect'] = individual_effects[
+            individual_effects <= median_effect
+        ].mean()
+        
+        self.results['high_responder_profile'] = high_responders[
+            self.confounders
+        ].mean().to_dict()
+        
+        self.results['low_responder_profile'] = low_responders[
+            self.confounders
+        ].mean().to_dict()
+    
+        return self
 
     def summary(self):
         naive = self.results['naive_odds_ratio']
@@ -97,5 +144,20 @@ class CausalLift:
             ate = self.results['ate']
             print(f"\nAverage Treatment Effect (ATE):  {ate:.4f}")
             print(f"In plain English: the treatment causes {ate*100:.1f} extra outcomes per 100 people")
-
+        if 'hte_coefficients' in self.results:
+            print(f"\n--- Heterogeneous Treatment Effects ---")
+            print(f"What predicts who responds most to treatment:")
+            for confounder, coef in self.results['hte_coefficients'].items():
+                direction = "more" if coef > 0 else "less"
+                print(f"  Higher {confounder} → responds {direction} (coef: {coef:.4f})")
+            print()
+            print(f"High responders: {self.results['high_responder_avg_effect']*100:.1f} extra outcomes per 100")
+            print(f"Low responders:  {self.results['low_responder_avg_effect']*100:.1f} extra outcomes per 100")
+            print()
+            print(f"High responder profile:")
+            for k, v in self.results['high_responder_profile'].items():
+                print(f"  Average {k}: {v:.2f}")
+            print(f"Low responder profile:")
+            for k, v in self.results['low_responder_profile'].items():
+                print(f"  Average {k}: {v:.2f}")
         return self

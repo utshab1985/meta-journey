@@ -30,4 +30,5 @@ model = CausalLift(
 
 model.fit(data)
 model.ate(data)
+model.hte(data)
 model.summary()
