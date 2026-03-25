@@ -16,6 +16,92 @@ class CausalLift:
         self.model = None
         self.results = {}
 
+    def check_assumptions(self, data):
+        import numpy as np
+        
+        print("\n--- CausalLift Assumption Checks ---")
+        all_passed = True
+        
+        # Check 1: Sample size
+        n_rows = len(data)
+        n_params = 1 + len(self.confounders)
+        ratio = n_rows / n_params
+        
+        if ratio < 100:
+            print(f"WARNING: Sample size may be insufficient")
+            print(f"  Rows: {n_rows}, Parameters: {n_params}, Ratio: {ratio:.0f}")
+            print(f"  Recommended: at least 100 rows per parameter")
+            all_passed = False
+        else:
+            print(f"Sample size:      PASSED ({n_rows:,} rows, ratio {ratio:.0f}:1)")
+        
+        # Check 2: Treatment balance
+        treatment_rate = data[self.treatment].mean()
+        
+        if treatment_rate < 0.1 or treatment_rate > 0.9:
+            print(f"WARNING: Treatment is severely imbalanced")
+            print(f"  {treatment_rate*100:.1f}% treated, {(1-treatment_rate)*100:.1f}% control")
+            print(f"  Causal estimates may be unreliable")
+            all_passed = False
+        elif treatment_rate < 0.2 or treatment_rate > 0.8:
+            print(f"Treatment balance: WARNING ({treatment_rate*100:.1f}% treated)")
+            print(f"  Mild imbalance — interpret results with caution")
+        else:
+            print(f"Treatment balance: PASSED ({treatment_rate*100:.1f}% treated)")
+        
+        # Check 3: Confounder relevance
+        from sklearn.linear_model import LinearRegression
+        from sklearn.metrics import r2_score
+        
+        X_conf = data[self.confounders].values
+        X_treat = data[self.treatment].values
+        conf_model = LinearRegression()
+        conf_model.fit(X_conf, X_treat)
+        r2 = r2_score(X_treat, conf_model.predict(X_conf))
+        
+        if r2 < 0.01:
+            print(f"Confounder relevance: LOW (R²={r2:.4f})")
+            print(f"  Confounders barely predict treatment")
+            print(f"  Consider whether these are true confounders")
+        else:
+            print(f"Confounder relevance: PASSED (R²={r2:.4f})")
+        
+        # Check 4: Overlap assumption
+        treated = data[data[self.treatment] == 1]
+        control = data[data[self.treatment] == 0]
+        
+        overlap_violations = 0
+        for confounder in self.confounders:
+            treated_range = (
+                treated[confounder].min(),
+                treated[confounder].max()
+            )
+            control_range = (
+                control[confounder].min(),
+                control[confounder].max()
+            )
+            
+            overlap_min = max(treated_range[0], control_range[0])
+            overlap_max = min(treated_range[1], control_range[1])
+            
+            if overlap_min >= overlap_max:
+                print(f"WARNING: No overlap in {confounder}")
+                print(f"  Treated range: {treated_range[0]:.2f} to {treated_range[1]:.2f}")
+                print(f"  Control range: {control_range[0]:.2f} to {control_range[1]:.2f}")
+                overlap_violations += 1
+        
+        if overlap_violations == 0:
+            print(f"Overlap assumption:   PASSED (all confounders overlap)")
+        
+        # Final verdict
+        print()
+        if all_passed and overlap_violations == 0:
+            print("Overall: ALL CHECKS PASSED - causal estimates are reliable")
+        else:
+            print("Overall: SOME CHECKS FAILED - interpret results carefully")
+        
+        return self
+
     def fit(self, data):
         features = [self.treatment] + self.confounders
         X = data[features].values
@@ -115,6 +201,24 @@ class CausalLift:
         ].mean().to_dict()
     
         return self
+    def predict_effect(self, user_profile):
+        """
+        Predict the treatment effect for a new user
+        given their confounder values.
+        
+        user_profile: dict like {'tech_savvy': 1.5}
+        """
+        if 'hte_coefficients' not in self.results:
+            raise ValueError("Run hte() first")
+        
+        import numpy as np
+        
+        effect = self.results['ate']
+        
+        for confounder, coef in self.results['hte_coefficients'].items():
+            effect += coef * user_profile.get(confounder, 0)
+        
+        return effect
 
     def summary(self):
         naive = self.results['naive_odds_ratio']
